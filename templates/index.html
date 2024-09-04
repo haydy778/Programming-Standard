@@ -82,29 +82,33 @@
         };
 
         document.getElementById('searchForm').onsubmit = function(event) {
-            event.preventDefault();
-            const query = document.getElementById('searchQuery').value;
+    event.preventDefault();
+    const query = document.getElementById('searchQuery').value;
 
-            fetch(`/search?query=${encodeURIComponent(query)}`)
-            .then(response => response.json())
-            .then(data => {
-                const resultsDiv = document.getElementById('searchResults');
-                resultsDiv.innerHTML = '';
-                if (data.results.length > 0) {
-                    data.results.forEach(result => {
-                        const resultItem = document.createElement('div');
-                        resultItem.innerHTML = `<strong>${result.filename}</strong>: ${result.content}`;
-                        resultsDiv.appendChild(resultItem);
-                    });
-                } else {
-                    resultsDiv.textContent = 'No results found.';
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                document.getElementById('searchResults').textContent = 'An error occurred during the search.';
+    fetch(`/search?query=${encodeURIComponent(query)}`)
+    .then(response => response.json())
+    .then(data => {
+        console.log('Received data:', data); // Debugging output
+        const resultsDiv = document.getElementById('searchResults');
+        resultsDiv.innerHTML = '';
+        if (data.results.length > 0) {
+            data.results.forEach(result => {
+                const resultItem = document.createElement('div');
+                resultItem.innerHTML = result;
+                resultsDiv.appendChild(resultItem);
             });
-        };
+        } else {
+            resultsDiv.textContent = 'No results found.';
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        document.getElementById('searchResults').textContent = 'An error occurred during the search.';
+    });
+};
+
+
+        
     </script>
 </body>
 </html>
