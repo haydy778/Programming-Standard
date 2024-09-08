@@ -77,41 +77,47 @@ def search():
             cursor.execute("SELECT filename, content FROM pdf_texts WHERE content LIKE ?", ('%' + query + '%',))
             results = cursor.fetchall()
 
-            # Concatenate results from each PDF into separate paragraphs
-            aggregated_content = {}
-            for filename, content in results:
-                if filename in aggregated_content:
-                    aggregated_content[filename] += " " + content
-                else:
-                    aggregated_content[filename] = content
+            search_results = {}
+            for r in results:
+                content = r[1].lower()
+                query_lower = query.lower()
+                start_index = 0
+                snippets = []
 
-            # Remove duplicate occurrences of words and format the output
-            processed_results = []
-            for filename, content in aggregated_content.items():
-                words = content.split()
-                unique_words = []
-                seen_words = set()
-                for word in words:
-                    lower_word = word.lower()
-                    if lower_word not in seen_words:
-                        unique_words.append(word)
-                        seen_words.add(lower_word)
-                processed_results.append({
-                    'filename': filename,
-                    'content': ' '.join(unique_words)
-                })
+                # Find all occurrences of the query in the content
+                while start_index < len(content):
+                    start_index = content.find(query_lower, start_index)
+                    if start_index == -1:
+                        break
+                    
+                    # Create a snippet of text around the match (50 characters before and after)
+                    snippet_start = max(start_index - 0, 0)
+                    snippet_end = min(start_index + 10000 + len(query_lower), len(content))
+                    snippet = r[1][snippet_start:snippet_end]
+                    
+                    # Highlight the query in the snippet
+                    snippet = snippet.replace(query, f"<mark>{query}</mark>", 1)
+                    snippets.append('...' + snippet + '...')
 
-            # Combine all results into one paragraph per PDF with separation
-            formatted_output = "\n\n".join(
-                f"{result['filename']}:\n{result['content']}" for result in processed_results
-            )
+                    # Move to the next occurrence of the query
+                    start_index += len(query_lower)
 
-            return jsonify(results=formatted_output)
+                # Combine all snippets into one paragraph for each PDF
+                if snippets:
+                    if r[0] in search_results:
+                        search_results[r[0]] += ' '.join(snippets)
+                    else:
+                        search_results[r[0]] = ' '.join(snippets)
+
+            # Format the final output for JSON response
+            final_results = [{'filename': filename, 'content': content} for filename, content in search_results.items()]
+            return jsonify(results=final_results)
 
         except Exception as e:
             print(f"Error in search: {e}")
             return jsonify({'error': 'Error performing search'}), 500
     return jsonify(results=[])
+
 
 if __name__ == '__main__':
     with app.app_context():
