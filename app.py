@@ -74,35 +74,42 @@ def search():
         try:
             db = get_db()
             cursor = db.cursor()
-            cursor.execute("SELECT filename, content FROM pdf_texts WHERE content LIKE ?", ('%' + query + '%',))
+            
+            # Fetch all PDFs containing the query (case-insensitive search)
+            cursor.execute("SELECT filename, content FROM pdf_texts WHERE LOWER(content) LIKE ?", ('%' + query.lower() + '%',))
             results = cursor.fetchall()
 
             search_results = {}
+            query_lower = query.lower()  # Convert the query to lowercase once for reuse
+
             for r in results:
-                content = r[1].lower()
-                query_lower = query.lower()
+                original_content = r[1]  # Original content for highlighting and snippet extraction
+                lower_content = original_content.lower()  # Lowercase content for case-insensitive matching
                 start_index = 0
-                snippets = []
+                snippets = []  # Use a list to maintain order
 
                 # Find all occurrences of the query in the content
-                while start_index < len(content):
-                    start_index = content.find(query_lower, start_index)
+                while start_index < len(lower_content):
+                    start_index = lower_content.find(query_lower, start_index)
                     if start_index == -1:
                         break
-                    
+
                     # Create a snippet of text around the match (50 characters before and after)
                     snippet_start = max(start_index - 0, 0)
-                    snippet_end = min(start_index + 10000 + len(query_lower), len(content))
-                    snippet = r[1][snippet_start:snippet_end]
-                    
-                    # Highlight the query in the snippet
-                    snippet = snippet.replace(query, f"<mark>{query}</mark>", 1)
-                    snippets.append('...' + snippet + '...')
+                    snippet_end = min(start_index + 10000 + len(query_lower), len(original_content))
+                    snippet = original_content[snippet_start:snippet_end]
+
+                    # Highlight the query in the snippet (case-insensitive matching)
+                    snippet_highlighted = snippet.replace(original_content[start_index:start_index + len(query)], f"<mark>{original_content[start_index:start_index + len(query)]}</mark>", 1)
+
+                    # Add the snippet to the list if it's not already there
+                    if snippet_highlighted not in snippets:
+                        snippets.append('...' + snippet_highlighted + '...')
 
                     # Move to the next occurrence of the query
                     start_index += len(query_lower)
 
-                # Combine all snippets into one paragraph for each PDF
+                # Combine all unique snippets into one paragraph for each PDF
                 if snippets:
                     if r[0] in search_results:
                         search_results[r[0]] += ' '.join(snippets)
@@ -117,6 +124,7 @@ def search():
             print(f"Error in search: {e}")
             return jsonify({'error': 'Error performing search'}), 500
     return jsonify(results=[])
+
 
 
 if __name__ == '__main__':
