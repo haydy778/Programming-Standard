@@ -3,6 +3,9 @@ from flask_cors import CORS
 import fitz  # PyMuPDF
 import sqlite3
 import os
+from sumy.parsers.plaintext import PlaintextParser
+from sumy.nlp.tokenizers import Tokenizer
+from sumy.summarizers.lsa import LsaSummarizer
 
 app = Flask(__name__)
 CORS(app)
@@ -31,7 +34,7 @@ def pdf_to_text(pdf_path):
         for page_num in range(doc.page_count):
             page = doc.load_page(page_num)
             text += page.get_text()
-        
+
         readable_text = ' '.join(text.replace('\n', ' ').split())
         return readable_text
     except Exception as e:
@@ -74,58 +77,47 @@ def search():
         try:
             db = get_db()
             cursor = db.cursor()
-            
-            # Fetch all PDFs containing the query (case-insensitive search)
-            cursor.execute("SELECT filename, content FROM pdf_texts WHERE LOWER(content) LIKE ?", ('%' + query.lower() + '%',))
+            cursor.execute("SELECT filename, content FROM pdf_texts WHERE content LIKE ?", ('%' + query + '%',))
             results = cursor.fetchall()
 
-            search_results = {}
-            query_lower = query.lower()  # Convert the query to lowercase once for reuse
-
+            search_results = []
             for r in results:
-                original_content = r[1]  # Original content for highlighting and snippet extraction
-                lower_content = original_content.lower()  # Lowercase content for case-insensitive matching
+                content = r[1].lower()
+                query_lower = query.lower()
                 start_index = 0
-                snippets = []  # Use a list to maintain order
 
                 # Find all occurrences of the query in the content
-                while start_index < len(lower_content):
-                    start_index = lower_content.find(query_lower, start_index)
+                while start_index < len(content):
+                    start_index = content.find(query_lower, start_index)
                     if start_index == -1:
                         break
+                    
+                    snippet_start = max(start_index - 50, 0)  # Get 50 characters before the match
+                    snippet_end = min(start_index + 50 + len(query_lower), len(content))  # Get 50 characters after the match
+                    snippet = r[1][snippet_start:snippet_end]
+                    snippet = snippet.replace(query, f"<mark>{query}</mark>", 1)  # Highlight the query in the snippet
 
-                    # Create a snippet of text around the match (50 characters before and after)
-                    snippet_start = max(start_index - 0, 0)
-                    snippet_end = min(start_index + 10000 + len(query_lower), len(original_content))
-                    snippet = original_content[snippet_start:snippet_end]
+                    # Check if the snippet is already in search_results to avoid duplicates
+                    if snippet not in [result['content'] for result in search_results]:
+                        search_results.append({'filename': r[0], 'content': '...' + snippet + '...'})
 
-                    # Highlight the query in the snippet (case-insensitive matching)
-                    snippet_highlighted = snippet.replace(original_content[start_index:start_index + len(query)], f"<mark>{original_content[start_index:start_index + len(query)]}</mark>", 1)
+                    start_index += len(query_lower)  # Move to the next occurrence
 
-                    # Add the snippet to the list if it's not already there
-                    if snippet_highlighted not in snippets:
-                        snippets.append('...' + snippet_highlighted + '...')
+            # Concatenate the snippets
+            concatenated_results = ' '.join([result['content'] for result in search_results])
 
-                    # Move to the next occurrence of the query
-                    start_index += len(query_lower)
+            # Summarize the concatenated text using sumy
+            parser = PlaintextParser.from_string(concatenated_results, Tokenizer("english"))
+            summarizer = LsaSummarizer()
+            summary = summarizer(parser.document, 3)  # Adjust the number of sentences as needed
+            summary_text = ' '.join([str(sentence) for sentence in summary])
 
-                # Combine all unique snippets into one paragraph for each PDF
-                if snippets:
-                    if r[0] in search_results:
-                        search_results[r[0]] += ' '.join(snippets)
-                    else:
-                        search_results[r[0]] = ' '.join(snippets)
-
-            # Format the final output for JSON response
-            final_results = [{'filename': filename, 'content': content} for filename, content in search_results.items()]
-            return jsonify(results=final_results)
+            return jsonify(results={'summary': summary_text})
 
         except Exception as e:
             print(f"Error in search: {e}")
             return jsonify({'error': 'Error performing search'}), 500
     return jsonify(results=[])
-
-
 
 if __name__ == '__main__':
     with app.app_context():
