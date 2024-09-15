@@ -23,64 +23,40 @@
     <div id="searchResults"></div>
 
     <script>
-        document.getElementById('uploadForm').onsubmit = function(event) {
-            event.preventDefault();
-            const formData = new FormData();
-            const pdfFile = document.getElementById('pdfFile').files[0];
-            formData.append('file', pdfFile);
 
-            const xhr = new XMLHttpRequest();
-            xhr.open('POST', '/process_pdf', true);
+document.getElementById('searchForm').onsubmit = function(event) {
+    event.preventDefault();
+    const query = document.getElementById('searchQuery').value;
 
-            // Update the progress bar
-            xhr.upload.onprogress = function(event) {
-                if (event.lengthComputable) {
-                    const percentComplete = (event.loaded / event.total) * 100;
-                    const progressBarFill = document.getElementById('progressBarFill');
-                    progressBarFill.style.width = percentComplete + '%';
-                    progressBarFill.textContent = Math.round(percentComplete) + '%';
-                }
-            };
+    fetch(`/search?query=${encodeURIComponent(query)}`)
+    .then(response => response.json())
+    .then(data => {
+        const resultsDiv = document.getElementById('searchResults');
+        resultsDiv.innerHTML = '';
 
-            xhr.onload = function() {
-                if (xhr.status === 200) {
-                    document.getElementById('uploadResult').textContent = JSON.parse(xhr.responseText).message;
-                } else {
-                    document.getElementById('uploadResult').textContent = 'An error occurred while uploading the file.';
-                }
-                // Reset progress bar after completion
-                const progressBarFill = document.getElementById('progressBarFill');
-                progressBarFill.style.width = '0%';
-                progressBarFill.textContent = '0%';
-            };
+        if (data.results && Array.isArray(data.results)) {
+            if (data.results.length > 0) {
+                data.results.forEach(result => {
+                    const resultItem = document.createElement('div');
+                    resultItem.innerHTML = `<strong>${result.filename}</strong>: ${result.content}`;
+                    resultsDiv.appendChild(resultItem);
+                });
+            } else {
+                resultsDiv.textContent = 'No results found.';
+            }
+        } else if (data.error) {
+            resultsDiv.textContent = data.error;
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        document.getElementById('searchResults').textContent = 'An error occurred during the search.';
+    });
+};
 
-            xhr.send(formData);
-        };
 
-        document.getElementById('searchForm').onsubmit = function(event) {
-            event.preventDefault();
-            const query = document.getElementById('searchQuery').value;
 
-            fetch(`/search?query=${encodeURIComponent(query)}`)
-            .then(response => response.json())
-            .then(data => {
-                const resultsDiv = document.getElementById('searchResults');
-                resultsDiv.innerHTML = '';
-                if (data.results.length > 0) {
-                    data.results.forEach(result => {
-                        const resultItem = document.createElement('div');
-                        resultItem.innerHTML = `<strong>${result.filename}</strong>: ${result.content}`;
-                        resultsDiv.appendChild(resultItem);
-                    });
-                } else {
-                    resultsDiv.textContent = 'No results found.';
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                document.getElementById('searchResults').textContent = 'An error occurred during the search.';
-            });
-        };
+        
     </script>
 </body>
 </html>
