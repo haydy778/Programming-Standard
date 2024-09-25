@@ -16,36 +16,44 @@
     <div id="searchResults"></div>
 
     <script>
-
 document.getElementById('searchForm').onsubmit = function(event) {
     event.preventDefault();
     const query = document.getElementById('searchQuery').value;
 
     fetch(`/search?query=${encodeURIComponent(query)}`)
-    .then(response => response.json())
-    .then(data => {
-        const resultsDiv = document.getElementById('searchResults');
-        resultsDiv.innerHTML = '';
+        .then(response => response.json())
+        .then(data => {
+            const resultsDiv = document.getElementById('searchResults');
+            resultsDiv.innerHTML = '';
 
-        if (data.results && Array.isArray(data.results)) {
-            if (data.results.length > 0) {
-                data.results.forEach(result => {
-                    const resultItem = document.createElement('div');
-                    resultItem.innerHTML = `<strong>${result.filename}</strong>: ${result.content}`;
-                    resultsDiv.appendChild(resultItem);
-                });
+            const displayedSummaries = new Set(); // Set to track displayed summaries
+
+            if (data.results && Array.isArray(data.results)) {
+                if (data.results.length > 0) {
+                    data.results.forEach(result => {
+                        if (!displayedSummaries.has(result.summary)) { // Check for duplicates
+                            displayedSummaries.add(result.summary); // Add to the set
+                            const resultItem = document.createElement('div');
+                            resultItem.innerHTML = `<strong>Summary:</strong> ${result.summary}`;
+                            resultsDiv.appendChild(resultItem);
+                        }
+                    });
+                } else {
+                    resultsDiv.textContent = 'No results found.';
+                }
+            } else if (data.error) {
+                resultsDiv.textContent = data.error;
             } else {
                 resultsDiv.textContent = 'No results found.';
             }
-        } else if (data.error) {
-            resultsDiv.textContent = data.error;
-        }
-    })
-    .catch(error => {
-        console.error('Error:', error);
-        document.getElementById('searchResults').textContent = 'An error occurred during the search.';
-    });
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            document.getElementById('searchResults').textContent = 'An error occurred during the search.';
+        });
 };
+
+
 
 
 
