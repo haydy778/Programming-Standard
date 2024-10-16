@@ -1,4 +1,5 @@
 import re
+print(re)
 from flask import Flask, request, jsonify, render_template, g
 from flask_cors import CORS
 import fitz  # PyMuPDF
@@ -54,7 +55,7 @@ def pdf_to_text(pdf_path):
             text += page.get_text()
 
         readable_text = ' '.join(text.replace('\n', ' ').split())
-        print(f"Extracted text for {pdf_path}: {readable_text[:500]}...")  # Print first 500 characters
+        print(f"Extracted text for {pdf_path}: {readable_text[:50]}...")  # Print first 500 characters
         return readable_text
     except Exception as e:
         print(f"Error in pdf_to_text: {e}")
