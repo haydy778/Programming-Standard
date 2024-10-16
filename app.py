@@ -1,13 +1,21 @@
+import re
 from flask import Flask, request, jsonify, render_template, g
 from flask_cors import CORS
 import fitz  # PyMuPDF
 import sqlite3
 import os
+from sumy.parsers.plaintext import PlaintextParser
+from sumy.nlp.tokenizers import Tokenizer
+from sumy.summarizers.lsa import LsaSummarizer
+import logging
 
 app = Flask(__name__)
 CORS(app)
 
 DATABASE = 'pdf_texts.db'
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 def get_db():
     """Open a new database connection if there is none yet for the current application context."""
@@ -23,6 +31,19 @@ def close_db(e=None):
 
 app.teardown_appcontext(close_db)
 
+def init_db():
+    """Initialize the database with the necessary tables."""
+    db = get_db()
+    cursor = db.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pdf_texts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL,
+            content TEXT NOT NULL
+        )
+    ''')
+    db.commit()
+
 def pdf_to_text(pdf_path):
     """Convert PDF pages to text using PyMuPDF."""
     try:
@@ -31,21 +52,27 @@ def pdf_to_text(pdf_path):
         for page_num in range(doc.page_count):
             page = doc.load_page(page_num)
             text += page.get_text()
-        
+
         readable_text = ' '.join(text.replace('\n', ' ').split())
+        print(f"Extracted text for {pdf_path}: {readable_text[:500]}...")  # Print first 500 characters
         return readable_text
     except Exception as e:
         print(f"Error in pdf_to_text: {e}")
         return ""
 
 def index_pdf(db, filename, content):
-    """Insert PDF text into the database."""
+    """Insert PDF text into the database if not already present."""
     try:
         cursor = db.cursor()
-        cursor.execute("INSERT INTO pdf_texts (filename, content) VALUES (?, ?)", (filename, content))
-        db.commit()
+        cursor.execute("SELECT COUNT(*) FROM pdf_texts WHERE filename = ? AND content = ?", (filename, content))
+        exists = cursor.fetchone()[0]
+        if not exists:
+            cursor.execute("INSERT INTO pdf_texts (filename, content) VALUES (?, ?)", (filename, content))
+            db.commit()
+        else:
+            logger.info(f"Duplicate entry for {filename} detected, skipping insertion.")
     except Exception as e:
-        print(f"Error in index_pdf: {e}")
+        logger.error(f"Error in index_pdf: {e}")
 
 def process_pdfs_in_directory():
     """Process all PDFs in the 'pdf_files' directory."""
@@ -55,11 +82,14 @@ def process_pdfs_in_directory():
 
     for filename in os.listdir(pdf_dir):
         if filename.lower().endswith('.pdf'):
-            pdf_path = os.path.join(pdf_dir, filename)
-            print(f"Processing {filename}...")
-            readable_text = pdf_to_text(pdf_path)
-            db = get_db()
-            index_pdf(db, filename, readable_text)
+            try:
+                pdf_path = os.path.join(pdf_dir, filename)
+                logger.info(f"Processing {filename}...")
+                readable_text = pdf_to_text(pdf_path)
+                db = get_db()
+                index_pdf(db, filename, readable_text)
+            except Exception as e:
+                logger.error(f"Error processing {filename}: {e}")
 
 @app.route('/')
 def index():
@@ -68,66 +98,89 @@ def index():
 
 @app.route('/search')
 def search():
-    """Search for content in the indexed PDFs."""
     query = request.args.get('query')
     if query:
         try:
+            logger.debug(f"Received search query: {query}")
+
             db = get_db()
             cursor = db.cursor()
-            
-            # Fetch all PDFs containing the query (case-insensitive search)
             cursor.execute("SELECT filename, content FROM pdf_texts WHERE LOWER(content) LIKE ?", ('%' + query.lower() + '%',))
             results = cursor.fetchall()
+            logger.debug(f"Search results: {results}")
 
-            search_results = {}
-            query_lower = query.lower()  # Convert the query to lowercase once for reuse
+            final_results = []
+            seen_summaries = set()  # Track seen summaries
 
-            for r in results:
-                original_content = r[1]  # Original content for highlighting and snippet extraction
-                lower_content = original_content.lower()  # Lowercase content for case-insensitive matching
-                start_index = 0
-                snippets = []  # Use a list to maintain order
+            for filename, content in results:
+                relevant_content = extract_relevant_text(content, query)
+                
+                if relevant_content:
+                    summary = summarize_text(relevant_content)
+                    summary_hash = hash(summary)  # Create a hash of the summary
 
-                # Find all occurrences of the query in the content
-                while start_index < len(lower_content):
-                    start_index = lower_content.find(query_lower, start_index)
-                    if start_index == -1:
-                        break
-
-                    # Create a snippet of text around the match (50 characters before and after)
-                    snippet_start = max(start_index - 0, 0)
-                    snippet_end = min(start_index + 2000 + len(query_lower), len(original_content))
-                    snippet = original_content[snippet_start:snippet_end]
-
-                    # Highlight the query in the snippet (case-insensitive matching)
-                    snippet_highlighted = snippet.replace(original_content[start_index:start_index + len(query)], f"<mark>{original_content[start_index:start_index + len(query)]}</mark>", 1)
-
-                    # Add the snippet to the list if it's not already there
-                    if snippet_highlighted not in snippets:
-                        snippets.append('...' + snippet_highlighted + '...')
-
-                    # Move to the next occurrence of the query
-                    start_index += len(query_lower)
-
-                # Combine all unique snippets into one paragraph for each PDF
-                if snippets:
-                    if r[0] in search_results:
-                        search_results[r[0]] += ' '.join(snippets)
-                    else:
-                        search_results[r[0]] = ' '.join(snippets)
-
-            # Format the final output for JSON response
-            final_results = [{'filename': filename, 'content': content} for filename, content in search_results.items()]
+                    if summary_hash not in seen_summaries:
+                        seen_summaries.add(summary_hash)
+                        final_results.append({
+                            'filename': filename,
+                            'relevant_content': relevant_content,
+                            'summary': summary
+                        })
+            
+            logger.debug(f"Final results: {final_results}")
             return jsonify(results=final_results)
-
         except Exception as e:
-            print(f"Error in search: {e}")
+            logger.error(f"Error during search: {e}", exc_info=True)
             return jsonify({'error': 'Error performing search'}), 500
     return jsonify(results=[])
 
+def extract_relevant_text(content, query, window_size=100):
+    """
+    Extracts and merges relevant sections of the content where the query appears.
+    Merges overlapping sections to avoid duplicates.
+    """
+    query = query.lower()
+    content = content.lower()
 
+    matches = [m.start() for m in re.finditer(query, content)]
+
+    if not matches:
+        return "No relevant content found for the query"
+
+    relevant_texts = []
+    current_start = max(0, matches[0] - window_size)
+    current_end = min(len(content), matches[0] + window_size)
+
+    for match in matches[1:]:
+        start = max(0, match - window_size)
+        end = min(len(content), match + window_size)
+
+        if start <= current_end + 20:  # Allow a small gap to merge close ranges
+            current_end = max(current_end, end)
+        else:
+            relevant_texts.append(content[current_start:current_end])
+            current_start = start
+            current_end = end
+
+    relevant_texts.append(content[current_start:current_end])
+    merged_text = ' ... '.join(relevant_texts)
+
+    return merged_text if relevant_texts else "No relevant content found"
+
+def summarize_text(text, sentence_count=5):
+    """Summarize the given text to a specified number of sentences."""
+    if len(text.strip()) < 100:
+        return "Content too short to summarize"
+
+    print(f"Text to summarize: {text[:500]}...")  # Print first 500 characters for verification
+    
+    parser = PlaintextParser.from_string(text, Tokenizer("english"))
+    summarizer = LsaSummarizer()
+    summary = summarizer(parser.document, sentence_count)
+    return ' '.join(str(sentence) for sentence in summary)
 
 if __name__ == '__main__':
     with app.app_context():
-        process_pdfs_in_directory()  # Process and index all PDFs before starting the server
+        init_db()
+        process_pdfs_in_directory()
     app.run(debug=True)
